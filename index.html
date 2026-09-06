@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>ThermaGrid | Hyper-Local Heatwave Early Warning Dashboard</title>
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            background: '#030712',
+            surface: 'rgba(15, 23, 42, 0.65)',
+            border: 'rgba(255, 255, 255, 0.08)',
+            accent: {
+              amber: '#f59e0b',
+              orange: '#f97316',
+              red: '#ef4444',
+              emerald: '#10b981'
+            }
+          },
+          fontFamily: {
+            sans: ['Space Grotesk', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace']
+          }
+        }
+      }
+    }
+  </script>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    body {
+      font-family: 'Space Grotesk', sans-serif;
+      background-color: #030712;
+      color: #f3f4f6;
+      background-image: 
+        radial-gradient(at 0% 0%, rgba(245, 158, 11, 0.08) 0px, transparent 50%),
+        radial-gradient(at 100% 0%, rgba(239, 68, 68, 0.05) 0px, transparent 50%),
+        radial-gradient(at 50% 100%, rgba(16, 185, 129, 0.04) 0px, transparent 50%);
+      background-attachment: fixed;
+    }
+    .num-display { font-family: 'JetBrains Mono', monospace; }
+    .glass-card {
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.01) 100%), rgba(15, 23, 42, 0.6);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: 1.25rem;
+      box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.5);
+    }
+    .glass-pill {
+      background: rgba(30, 41, 59, 0.5);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 0.85rem;
+    }
+    .glow-amber { box-shadow: 0 0 25px -5px rgba(245, 158, 11, 0.25); }
+    .text-glow-amber { text-shadow: 0 0 12px rgba(245, 158, 11, 0.4); }
+    .text-glow-red { text-shadow: 0 0 12px rgba(239, 68, 68, 0.5); }
+    #map { height: 480px; width: 100%; border-radius: 1rem; z-index: 10; }
+    .leaflet-container { background: #e5e7eb !important; }
+    @keyframes radar-pulse {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.05); opacity: 0.4; }
+      100% { transform: scale(0.95); opacity: 0.8; }
+    }
+    .radar-indicator { animation: radar-pulse 2s infinite ease-in-out; }
+  </style>
+</head>
+<body class="min-h-screen pb-12 antialiased selection:bg-amber-500/30 selection:text-amber-300">
+
+  <!-- Header Navigation -->
+  <header class="glass-card sticky top-0 z-50 mx-4 mt-4 px-5 py-3.5 md:mx-8">
+    <div class="flex flex-wrap items-center justify-between gap-4">
+      <div class="flex items-center gap-3.5">
+        <span class="relative grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-amber-500/30 bg-gradient-to-br from-amber-500/20 to-amber-700/10 text-amber-400 glow-amber">
+          <i data-lucide="flame" class="h-6 w-6"></i>
+          <span class="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-amber-500 radar-indicator"></span>
+        </span>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-base font-bold tracking-[0.2em] uppercase md:text-lg text-slate-100">ThermaGrid</h1>
+            <span class="rounded-full bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 text-[9px] font-semibold tracking-wider text-amber-400 uppercase">Live Prototype</span>
+          </div>
+          <p class="text-xs text-slate-400">Hyper-Local Thermal Early Warning Grid</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <!-- Search Input Form -->
+        <div class="glass-pill flex items-center gap-2.5 px-3.5 py-2 transition-all focus-within:border-amber-500/40">
+          <i data-lucide="search" class="h-4 w-4 text-slate-400 cursor-pointer" onclick="fetchHeatData()"></i>
+          <input id="city-input" placeholder="Enter City (e.g., Delhi, Jaipur)" class="w-[200px] bg-transparent text-xs font-medium text-slate-200 outline-none placeholder:text-slate-500" value="Delhi"/>
+          <button onclick="fetchHeatData()" class="text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-1 rounded-md hover:bg-amber-500/30">Go</button>
+        </div>
+
+        <div class="glass-pill num-display px-4 py-1.5 text-right border-amber-500/20">
+          <div id="live-clock" class="text-base font-bold text-amber-400 text-glow-amber">00:00:00</div>
+          <div class="text-[9px] tracking-widest text-slate-400 uppercase">Synchronised</div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Section Wrapper -->
+  <main class="mx-4 mt-6 flex flex-col gap-6 md:mx-8">
+    
+    <!-- Top Grid Layout: Map & Sidebar -->
+    <div class="grid gap-6 lg:grid-cols-[65fr_35fr]">
+      
+      <!-- Left Section: GIS Heat Exposure Map -->
+      <section class="glass-card flex flex-col gap-4 p-5 md:p-6">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 class="text-xs font-bold tracking-widest uppercase text-slate-300 flex items-center gap-2">
+              <i data-lucide="map-pin" class="h-4 w-4 text-amber-500"></i> GIS Thermal Exposure Map
+            </h2>
+            <p id="target-city-label" class="text-xs text-slate-400 mt-0.5">Monitoring: Delhi, India</p>
+          </div>
+          <div class="glass-pill flex p-1">
+            <button class="rounded-lg bg-amber-500/20 px-3.5 py-1 text-xs font-semibold text-amber-300 border border-amber-500/30">Heat Index Layer</button>
+          </div>
+        </div>
+
+        <!-- Interactive Map Canvas Container -->
+        <div class="relative overflow-hidden rounded-2xl border border-white/10 shadow-2xl">
+          <div id="map"></div>
+          
+          <!-- Floating Layer Info -->
+          <div class="glass-pill absolute top-4 left-4 z-[1000] px-4 py-2.5 bg-slate-950/80">
+            <p class="text-[9px] tracking-widest text-slate-400 uppercase">Active Metric Layer</p>
+            <p class="text-xs font-bold text-amber-400">Heat Index (WBGT Equivalent)</p>
+            <p class="max-w-[180px] text-[10px] text-slate-400 mt-0.5 leading-tight">Apparent heat level calculated dynamically via backend</p>
+          </div>
+
+          <!-- Floating City Status -->
+          <div class="glass-pill absolute top-4 right-4 z-[1000] flex items-center gap-2.5 px-4 py-2 text-xs font-semibold border-amber-500/30 bg-slate-950/80 glow-amber">
+            <i data-lucide="shield-alert" class="h-4 w-4 text-amber-400"></i>
+            <span>Alert Status: <strong id="status-badge" class="text-amber-400">Moderate Alert</strong></span>
+          </div>
+
+          <!-- Heat Legend -->
+          <div class="glass-pill absolute right-4 bottom-4 z-[1000] flex flex-wrap gap-4 px-4 py-2 bg-slate-950/80 border-white/10">
+            <span class="flex items-center gap-1.5 text-[10px] text-slate-300"><i class="h-2.5 w-2.5 rounded-full bg-emerald-500"></i>Low</span>
+            <span class="flex items-center gap-1.5 text-[10px] text-slate-300"><i class="h-2.5 w-2.5 rounded-full bg-amber-500"></i>Caution</span>
+            <span class="flex items-center gap-1.5 text-[10px] text-slate-300"><i class="h-2.5 w-2.5 rounded-full bg-orange-500"></i>High Risk</span>
+            <span class="flex items-center gap-1.5 text-[10px] text-slate-300"><i class="h-2.5 w-2.5 rounded-full bg-red-500"></i>Extreme Crisis</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Sidebar: Dynamic Metrics -->
+      <aside class="flex flex-col gap-6">
+        
+        <section class="glass-card p-5 md:p-6">
+          <h2 class="mb-4 flex items-center gap-2 text-xs font-bold tracking-widest uppercase text-slate-300">
+            <i data-lucide="activity" class="h-4 w-4 text-amber-500"></i> Real-Time Physiological Metrics
+          </h2>
+          
+          <div class="grid grid-cols-2 gap-3.5">
+            <div class="glass-pill p-4">
+              <p class="flex items-center gap-1.5 text-[11px] text-slate-400 font-medium">
+                <i data-lucide="thermometer" class="h-4 w-4 text-amber-400"></i> Ambient Temp
+              </p>
+              <p id="val-temp" class="num-display mt-2 text-3xl font-bold text-slate-100">--°</p>
+              <p class="text-[10px] text-slate-500 mt-0.5">Shaded sensor reading</p>
+            </div>
+
+            <div class="glass-pill p-4 border-red-500/20 bg-red-500/5">
+              <p class="flex items-center gap-1.5 text-[11px] text-red-400 font-medium">
+                <i data-lucide="flame" class="h-4 w-4 text-red-500"></i> Apparent Heat
+              </p>
+              <p id="val-apparent" class="num-display mt-2 text-3xl font-bold text-red-500 text-glow-red">--°</p>
+              <p class="text-[10px] text-red-400/70 mt-0.5">Calculated Heat Index</p>
+            </div>
+
+            <div class="glass-pill p-4">
+              <p class="flex items-center gap-1.5 text-[11px] text-slate-400 font-medium">
+                <i data-lucide="droplets" class="h-4 w-4 text-blue-400"></i> Humidity
+              </p>
+              <p id="val-humidity" class="num-display mt-2 text-3xl font-bold text-slate-100">--%</p>
+              <p class="text-[10px] text-slate-500 mt-0.5">Relative Humidity</p>
+            </div>
+
+            <div class="glass-pill p-4">
+              <p class="flex items-center gap-1.5 text-[11px] text-slate-400 font-medium">
+                <i data-lucide="wind" class="h-4 w-4 text-emerald-400"></i> Wind Speed
+              </p>
+              <p id="val-wind" class="num-display mt-2 text-3xl font-bold text-slate-100">--</p>
+              <p class="text-[10px] text-slate-500 mt-0.5">km/h velocity</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- 5-Day Forecast -->
+        <section class="glass-card flex flex-col p-5 md:p-6">
+          <div class="mb-4 flex items-baseline justify-between">
+            <h2 class="text-xs font-bold tracking-widest uppercase text-slate-300 flex items-center gap-2">
+              <i data-lucide="trending-up" class="h-4 w-4 text-orange-500"></i> 5-Day Max Temperature Forecast
+            </h2>
+          </div>
+
+          <div id="forecast-container" class="grid grid-cols-5 gap-2 text-center text-xs num-display py-2">
+            <!-- Populated dynamically -->
+          </div>
+        </section>
+
+      </aside>
+    </div>
+
+    <!-- Full Width Graph Tile Across the Bottom -->
+    <section class="glass-card flex flex-col p-5 md:p-6 w-full">
+      <div class="mb-4 flex items-center justify-between">
+        <h2 class="text-xs font-bold tracking-widest uppercase text-slate-300 flex items-center gap-2">
+          <i data-lucide="line-chart" class="h-4 w-4 text-amber-500"></i> 24-Hour Diurnal Thermal Profile & Trend Analysis
+        </h2>
+        <span class="text-[11px] text-slate-400 font-mono bg-slate-900/60 px-3 py-1 rounded-md border border-white/5">Metrics: Ambient (°C) vs Apparent Heat Index (°C)</span>
+      </div>
+      <div class="relative w-full h-[260px]">
+        <canvas id="heatTrendChart"></canvas>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    lucide.createIcons();
+
+    function updateClock() {
+      const now = new Date();
+      document.getElementById('live-clock').innerText = now.toTimeString().split(' ')[0];
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // Map Setup - Light Theme Basemap
+    const map = L.map('map', { zoomControl: false }).setView([22.5937, 78.9629], 5);
+    
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map);
+
+    // Official Composite Boundary GeoJSON
+    fetch('https://raw.githubusercontent.com/datameet/maps/master/Country/india-composite.geojson')
+      .then(response => response.json())
+      .then(data => {
+        L.geoJSON(data, {
+          style: {
+            color: '#dc2626',
+            weight: 2,
+            fillColor: '#f59e0b',
+            fillOpacity: 0.05
+          }
+        }).addTo(map);
+      })
+      .catch(err => {
+        console.warn('GeoJSON boundary load warning:', err);
+      });
+
+    let activeCircle = null;
+    let activeMarker = null;
+    let trendChart = null;
+
+    // Full-width Chart.js Setup
+    function initChart() {
+      const ctx = document.getElementById('heatTrendChart').getContext('2d');
+      
+      const ambientGradient = ctx.createLinearGradient(0, 0, 0, 240);
+      ambientGradient.addColorStop(0, 'rgba(245, 158, 11, 0.35)');
+      ambientGradient.addColorStop(1, 'rgba(245, 158, 11, 0.0)');
+
+      const apparentGradient = ctx.createLinearGradient(0, 0, 0, 240);
+      apparentGradient.addColorStop(0, 'rgba(239, 68, 68, 0.35)');
+      apparentGradient.addColorStop(1, 'rgba(239, 68, 68, 0.0)');
+
+      trendChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [
+            {
+              label: 'Ambient Temperature (°C)',
+              data: [],
+              borderColor: '#f59e0b',
+              backgroundColor: ambientGradient,
+              fill: true,
+              tension: 0.4,
+              borderWidth: 2.5,
+              pointRadius: 3,
+              pointHoverRadius: 6
+            },
+            {
+              label: 'Apparent Heat Index (°C)',
+              data: [],
+              borderColor: '#ef4444',
+              backgroundColor: apparentGradient,
+              fill: true,
+              tension: 0.4,
+              borderWidth: 2.5,
+              pointRadius: 3,
+              pointHoverRadius: 6
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: 'top',
+              labels: {
+                color: '#cbd5e1',
+                font: { size: 12, family: 'Space Grotesk' },
+                boxWidth: 16,
+                usePointStyle: true
+              }
+            }
+          },
+          scales: {
+            x: {
+              grid: { color: 'rgba(255, 255, 255, 0.05)' },
+              ticks: { color: '#94a3b8', font: { size: 10, family: 'JetBrains Mono' } }
+            },
+            y: {
+              grid: { color: 'rgba(255, 255, 255, 0.05)' },
+              ticks: { color: '#94a3b8', font: { size: 10, family: 'JetBrains Mono' } }
+            }
+          }
+        }
+      });
+    }
+
+    document.getElementById('city-input').addEventListener('keypress', function(e) {
+      if (e.key === 'Enter') {
+        fetchHeatData();
+      }
+    });
+
+    function fetchHeatData() {
+      const cityName = document.getElementById('city-input').value.trim();
+      if (!cityName) return;
+
+      fetch(`/api/get_heat_data?city=${encodeURIComponent(cityName)}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.error) {
+            alert(data.error);
+            return;
+          }
+
+          document.getElementById('target-city-label').innerText = `Monitoring: ${data.city}`;
+          document.getElementById('val-temp').innerText = `${data.temp}°`;
+          document.getElementById('val-apparent').innerText = `${data.apparent_temp}°`;
+          document.getElementById('val-humidity').innerText = `${data.humidity}%`;
+          document.getElementById('val-wind').innerText = `${data.wind}`;
+          
+          const statusBadge = document.getElementById('status-badge');
+          statusBadge.innerText = `${data.risk}`;
+          statusBadge.style.color = data.color;
+
+          if (activeCircle) map.removeLayer(activeCircle);
+          if (activeMarker) map.removeLayer(activeMarker);
+
+          map.flyTo([data.lat, data.lng], 8);
+
+          activeCircle = L.circle([data.lat, data.lng], {
+            color: data.color,
+            fillColor: data.color,
+            fillOpacity: 0.35,
+            radius: 40000,
+            weight: 2
+          }).addTo(map);
+
+          activeMarker = L.marker([data.lat, data.lng]).addTo(map)
+            .bindPopup(`<b>${data.city}</b><br>Heat Index: ${data.apparent_temp}°C<br>Status: ${data.risk}`)
+            .openPopup();
+
+          const fcContainer = document.getElementById('forecast-container');
+          if (data.forecast && data.forecast.length > 0) {
+            fcContainer.innerHTML = data.forecast.map((t, idx) => `
+              <div class="glass-pill p-2">
+                <div class="text-[9px] text-slate-400">Day ${idx+1}</div>
+                <div class="font-bold text-amber-400 mt-1">${t}°C</div>
+              </div>
+            `).join('');
+          }
+
+          // Dynamic Chart Integration from Open-Meteo API
+          if (trendChart && data.graph_data) {
+            trendChart.data.labels = data.graph_data.labels;
+            trendChart.data.datasets[0].data = data.graph_data.ambient;
+            trendChart.data.datasets[1].data = data.graph_data.apparent;
+            trendChart.update();
+          }
+        })
+        .catch(err => {
+          console.error("Error fetching heat data:", err);
+        });
+    }
+
+    window.onload = () => {
+      initChart();
+      fetchHeatData();
+    };
+  </script>
+</body>
+</html>
